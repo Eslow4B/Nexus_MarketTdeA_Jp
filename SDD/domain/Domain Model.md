@@ -8,8 +8,7 @@ The model follows Object-Oriented Design and Domain-Driven Design (DDD) principl
 
 The model distinguishes between:
 
-* **Persons**, which represent identifiable people participating in the marketplace.
-* **Users**, which represent the participants of the marketplace and their assigned role.
+* **Users**, which represent every participant of the marketplace and their assigned role.
 * **Products**, which represent the goods offered for sale, either physical or digital.
 * **Warehouses and Inventory**, which represent the physical storage and stock management of physical products.
 * **Orders**, which represent the central commercial process of the marketplace.
@@ -22,10 +21,9 @@ An order generates an invoice once payment is confirmed, may generate a shipment
 # Domain Class Hierarchy
 
 ```text
-Person (Abstract)
-└── User
-     ├── Buyer
-     └── Seller
+User
+├── Buyer
+└── Seller
 
 Product (Abstract)
 ├── PhysicalProduct
@@ -47,11 +45,10 @@ Refund
 # Domain Relationships
 
 ```text
-Person
+User
    │
-   └── User
-          ├── Buyer
-          └── Seller
+   ├── Buyer
+   └── Seller
 
 Seller
    │
@@ -101,64 +98,41 @@ Return
 
 ---
 
-# Person (Abstract)
-
-## Description
-
-Represents any identifiable person interacting with NexusMarket.
-
-This abstract class centralizes the identity information shared by every participant of the marketplace, regardless of their role.
-
-The role assigned to a person represents their responsibilities and permissions within the system.
-
-This class cannot be instantiated directly.
-
-## Attributes
-
-| Attribute | Type       | Description                                                                    |
-| --------- | ---------- | ------------------------------------------------------------------------------- |
-| id        | String     | Unique identity document number of the person. Must be unique across the platform. |
-| fullName  | String     | Full name of the person.                                                        |
-| email     | String     | Primary email address, used for access and communication. Must be unique.       |
-| role      | SystemRole | Defines the person's responsibilities and permissions within the marketplace.   |
-
-## Relationships
-
-* A `Person` is specialized as a `User` for participation within the marketplace.
-* The `role` belongs to `Person` because it represents the person's meaning and responsibilities within the system, and is inherited by `User` and its specializations.
-
-## Business Rule
-
-```text
-The identity document (id) and the email of a Person must be unique
-across the platform.
-```
-
----
-
 # User
 
 ## Description
 
-Represents a participant of NexusMarket who interacts with the platform according to the responsibilities defined by their role.
+Represents any participant of NexusMarket who interacts with the platform according to the responsibilities defined by their role.
 
 Participants whose role does not require additional attributes or relationships (`ADMINISTRATOR`, `LOGISTICS_OPERATOR`, `SUPERVISOR`) are represented directly as `User` instances. Participants whose role requires additional attributes or relationships (`BUYER`, `SELLER`) are represented by a specialized subclass.
 
-## Inherits From
+`User` is the root of the person hierarchy in NexusMarket. Unlike systems where a person may exist independently of a system identity (for example, a bank customer without a system user), every participant of NexusMarket interacts with the platform directly as a `User`. For this reason, a separate `Person` abstraction was considered but discarded: it would have had exactly one specialization (`User`) and no independent use anywhere in the domain, so it added no real abstraction — only the appearance of one.
 
-`Person`
+`username` and `password` are included because a marketplace requires knowing who is currently authenticated, which is a functional requirement of the domain regardless of implementation. The system specification excludes **technical** authentication mechanisms (hashing algorithms, JWT, security frameworks) from its scope, not the existence of credentials themselves. The concrete mechanism used to validate credentials and issue a session belongs to the Services layer, not to this model.
 
 ## Attributes
 
-| Attribute | Type       | Description                                                     |
-| --------- | ---------- | ------------------------------------------------------------------ |
-| status    | UserStatus | Current operational status of the user within the marketplace.  |
+| Attribute | Type       | Description                                                                          |
+| --------- | ---------- | ------------------------------------------------------------------------------------- |
+| id        | String     | Unique identity document number of the person. Must be unique across the platform.    |
+| fullName  | String     | Full name of the person.                                                              |
+| email     | String     | Primary email address, used for access and communication. Must be unique.             |
+| role      | SystemRole | Defines the participant's responsibilities and permissions within the marketplace.    |
+| status    | UserStatus | Current operational status of the user within the marketplace.                        |
+| username  | String     | Login name used during authentication. Must be unique across the platform.            |
+| password  | String     | Secure password hash stored by the system.                                            |
 
 ## Relationships
 
-* A `User` inherits identity and role information from `Person`.
 * A `User` may be specialized as `Buyer` or `Seller` when their role requires additional attributes or relationships.
 * A `User` whose role is `ADMINISTRATOR`, `LOGISTICS_OPERATOR`, or `SUPERVISOR` is represented directly by this class, without further specialization.
+
+## Business Rule
+
+```text
+The identity document (id), the email, and the username of a User must be
+unique across the platform.
+```
 
 ---
 
@@ -196,16 +170,24 @@ Represents a user responsible for registering and managing products and warehous
 
 Sellers cannot self-register; they are incorporated into the platform by an `Administrator`.
 
-A seller has no additional attributes of its own beyond those inherited from `User`. What distinguishes a seller within the domain is the set of entities it owns — its warehouses and its products — rather than additional scalar attributes.
+This class has no additional attributes of its own beyond those inherited from `User`. What distinguishes a seller within the domain is the set of entities it owns — its warehouses and its products — rather than additional scalar attributes.
 
 ## Inherits From
 
 `User`
 
+## Attributes
+
+| Attribute  | Type                  | Description                                                          |
+| ----------- | --------------------- | ------------------------------------------------------------------------ |
+| warehouses  | List\<Warehouse\>     | Warehouses managed by the seller. Empty by default.                    |
+| products    | List\<Product\>       | Products published by the seller. Empty by default.                    |
+
 ## Relationships
 
-* A `Seller` manages zero or more `Warehouse` instances.
-* A `Seller` publishes zero or more `Product` instances.
+* A `Seller` manages zero or more `Warehouse` instances, held in `warehouses`.
+* A `Seller` publishes zero or more `Product` instances, held in `products`.
+* `warehouses` and `products` are not populated by default. They are loaded on demand by the corresponding consultation service, mirroring the lazy-loading pattern used for aggregate relationships throughout the domain.
 
 ## Business Rule
 
@@ -496,11 +478,11 @@ Represents the reimbursement of funds to a buyer as a result of an approved retu
 
 # Domain Design Rules
 
-## Person and User
+## User
 
-* `User` inherits from `Person`.
-* `role` is defined in `Person` and inherited by `User` and its specializations.
-* Unlike `Person`, `User` is not abstract: it is instantiated directly for roles that require no additional attributes (`ADMINISTRATOR`, `LOGISTICS_OPERATOR`, `SUPERVISOR`).
+* `User` is the root of the person hierarchy in NexusMarket; there is no separate `Person` abstraction, because it would have had exactly one specialization and no independent use in the domain.
+* `User` is not abstract: it is instantiated directly for roles that require no additional attributes (`ADMINISTRATOR`, `LOGISTICS_OPERATOR`, `SUPERVISOR`).
+* `username` and `password` are functional domain requirements (the system must know who is authenticated); only the technical mechanism used to validate them is excluded from scope and deferred to the Services layer.
 
 ## Buyer and Seller
 
@@ -527,6 +509,6 @@ Represents the reimbursement of funds to a buyer as a result of an approved retu
 
 The following rules apply across the domain rather than to a single entity:
 
-* **RG-02** — Each person has exactly one role. For this reason, `Person.role` is modeled as a single `SystemRole` value rather than a collection.
+* **RG-02** — Each person has exactly one role. For this reason, `User.role` is modeled as a single `SystemRole` value rather than a collection.
 * **RG-01** — Every operation on the platform must be executed by an authenticated user. This rule constrains system access and will be enforced by the Authentication and Authorization services; it does not require a dedicated domain entity.
 * **RG-03** — No participant may manage information outside the scope of their role (for example, a `Buyer` must never access another buyer's data, and only a `Seller` manages its own `Warehouse` and `Product` instances). This rule will be enforced by the Authorization services documented in the next deliverable.

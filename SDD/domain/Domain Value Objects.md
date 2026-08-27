@@ -51,7 +51,7 @@ This class cannot be instantiated directly.
 ## Characteristics
 
 * Immutable.
-* Equality is determined by value rather than object identity.
+* Equality and hashCode are computed exclusively from the `code` attribute. `name` and `description` are descriptive metadata and must not participate in equality comparisons — two catalog values with the same `code` are the same value regardless of any difference in their descriptive text.
 * Catalog values are controlled by the domain.
 * Catalog values must not be represented by arbitrary strings throughout the application.
 * Each catalog value must have a unique `code`.
@@ -292,7 +292,7 @@ All Value Objects must be immutable after creation. Their values cannot be modif
 
 ## Equality
 
-Value Objects are compared according to their values rather than object identity. Two instances containing the same business values represent the same Value Object.
+For `DomainCatalog` values, equality is based exclusively on the business `code`, not on the full set of attributes. Two catalog instances with the same `code` represent the same Value Object even if `name` or `description` differ.
 
 ## Controlled Values
 
