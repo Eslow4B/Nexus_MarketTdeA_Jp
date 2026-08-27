@@ -37,13 +37,16 @@ public class Buyer extends User {
      * @param email                primary email address of the person
      * @param role                 role assigned to the person
      * @param status               current operational status of the user
+     * @param username             login name used during authentication
+     * @param password             secure password hash stored by the system
      * @param primaryAddress       habitual address used for order deliveries
      * @param additionalAddresses  secondary delivery addresses
      * @param commercialStatus     condition of the buyer for placing new orders
      */
     public Buyer(String id, String fullName, String email, SystemRole role, UserStatus status,
+                 String username, String password,
                  String primaryAddress, List<String> additionalAddresses, CommercialStatus commercialStatus) {
-        super(id, fullName, email, role, status);
+        super(id, fullName, email, role, status, username, password);
         this.primaryAddress = primaryAddress;
         this.additionalAddresses = additionalAddresses != null
                 ? new ArrayList<>(additionalAddresses)
