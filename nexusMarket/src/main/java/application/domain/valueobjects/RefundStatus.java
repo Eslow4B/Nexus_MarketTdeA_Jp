@@ -1,16 +1,16 @@
 package application.domain.valueobjects;
 
-import lombok.Getter;
+import java.util.List;
 
 /**
- * Represents the current status of a refund associated with an approved return.
+ * Represents the current status of a refund associated with a completed return.
  */
-@Getter
 public final class RefundStatus extends DomainCatalog {
 
-    /** Refund has been requested and awaits processing. */
+    /** Refund has been opened for a completed return and awaits the Administrator's decision. */
     public static final RefundStatus PENDING =
-            new RefundStatus("PENDING", "Pending", "Refund has been requested and awaits processing.");
+            new RefundStatus("PENDING", "Pending",
+                    "Refund has been opened for a completed return and awaits the Administrator's decision.");
 
     /** Refund has been completed and funds returned. */
     public static final RefundStatus PROCESSED =
@@ -19,6 +19,28 @@ public final class RefundStatus extends DomainCatalog {
     /** Refund request has been denied. */
     public static final RefundStatus REJECTED =
             new RefundStatus("REJECTED", "Rejected", "Refund request has been denied.");
+
+    private static final List<RefundStatus> VALUES = List.of(PENDING, PROCESSED, REJECTED);
+
+    /**
+     * Returns every allowed value of this catalog.
+     *
+     * @return unmodifiable list of values
+     */
+    public static List<RefundStatus> values() {
+        return VALUES;
+    }
+
+    /**
+     * Returns the value whose business code matches the given one.
+     *
+     * @param code business code to look up
+     * @return the matching value
+     * @throws application.domain.exceptions.DomainValidationException if the code is unknown
+     */
+    public static RefundStatus fromCode(String code) {
+        return findByCode(VALUES, code, "RefundStatus");
+    }
 
     private RefundStatus(String code, String name, String description) {
         super(code, name, description);

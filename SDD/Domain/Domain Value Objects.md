@@ -55,6 +55,8 @@ This class cannot be instantiated directly.
 * Catalog values are controlled by the domain.
 * Catalog values must not be represented by arbitrary strings throughout the application.
 * Each catalog value must have a unique `code`.
+* `toString()` returns the `code`.
+* Every concrete catalog exposes `values()` (every allowed value) and `fromCode(String)` (the controlled instance for a given code). Adapters use `fromCode` to translate a persisted or transported code back into the Value Object; an unknown code raises `DomainValidationException` instead of producing an arbitrary value.
 
 ---
 
@@ -64,7 +66,7 @@ This class cannot be instantiated directly.
 
 Represents the responsibilities and permissions assigned to a person within NexusMarket.
 
-The role is a characteristic of `Person` because it represents what the person means within the system. Each participant has exactly one role.
+The role is a characteristic of `User` because it represents what the person means within the system. Each participant has exactly one role (RG-02).
 
 ## Inherits From
 
@@ -75,8 +77,8 @@ The role is a characteristic of `Person` because it represents what the person m
 | Code                | Name                | Description                                                              |
 | ------------------- | ------------------- | ------------------------------------------------------------------------- |
 | BUYER               | Buyer               | Person who purchases products published on the marketplace.              |
-| SELLER              | Seller              | Person responsible for registering and managing products and warehouses. |
-| ADMINISTRATOR       | Administrator       | Person responsible for incorporating sellers and managing warehouses.    |
+| SELLER              | Seller              | Person responsible for registering and managing their own products.      |
+| ADMINISTRATOR       | Administrator       | Person responsible for administering sellers and warehouses.             |
 | LOGISTICS_OPERATOR  | Logistics Operator  | Person responsible for the physical operation of warehouses and dispatches. |
 | SUPERVISOR          | Supervisor          | Person with a consultation and operational monitoring profile.           |
 
@@ -100,6 +102,10 @@ Represents the current operational status of a user within the marketplace.
 | INACTIVE | Inactive | User exists but is not currently active on the platform.  |
 | BLOCKED  | Blocked  | User access has been suspended.                          |
 
+## Behavior
+
+* `allowsAccess()` — `true` only for `ACTIVE`. `INACTIVE` and `BLOCKED` users cannot authenticate.
+
 ---
 
 # CommercialStatus
@@ -116,9 +122,16 @@ Represents the commercial condition of a buyer for placing new orders.
 
 | Code       | Name       | Description                                          |
 | ---------- | ---------- | ------------------------------------------------------- |
-| ACTIVE     | Active     | Buyer can place new orders normally.                  |
-| RESTRICTED | Restricted | Buyer has limitations due to a pending situation.      |
-| SUSPENDED  | Suspended  | Buyer is temporarily prevented from placing new orders. |
+| ACTIVE     | Active     | Buyer can manage the cart and place new orders normally. |
+| RESTRICTED | Restricted | Buyer may manage the cart but cannot confirm new orders until a pending situation is resolved. |
+| SUSPENDED  | Suspended  | Buyer can neither manage the cart nor confirm new orders. |
+
+The business specification defines this attribute as mandatory but does not list its values or their effects; they are fixed by DEC-07 in [Business Decisions](Business%20Decisions.md). Orders already confirmed are never affected by a change of commercial status.
+
+## Behavior
+
+* `allowsCartManagement()` — `true` unless `SUSPENDED`.
+* `allowsOrderConfirmation()` — `true` only for `ACTIVE`.
 
 ---
 
@@ -140,6 +153,12 @@ Represents the current status of a product within the catalog.
 | SUSPENDED      | Suspended     | Product is temporarily hidden from the public catalog.    |
 | DISCONTINUED   | Discontinued  | Product is permanently removed from commercialization.    |
 
+The catalog has no "draft" value: a product is registered directly as `PUBLISHED`, and its seller may set it to `SUSPENDED` while it is not ready (DEC-12).
+
+## Behavior
+
+* `allowsNewOrders()` — `true` only for `PUBLISHED`. A product is available for sale only when this is `true` **and** its seller is active (DEC-08).
+
 ---
 
 # InventoryCondition
@@ -158,6 +177,12 @@ Represents the physical condition of the stock tracked by an inventory record. I
 | ---------- | --------- | ------------------------------------------------------------ |
 | AVAILABLE  | Available | Stock is in good condition and may be reserved or sold.  |
 | DAMAGED    | Damaged   | Stock is damaged and must not be reserved or sold.        |
+
+The condition applies to every unit of the record; when only some units are damaged, they are removed with a negative `ADJUSTMENT` instead (DEC-15).
+
+## Behavior
+
+* `isReservable()` — `true` only for `AVAILABLE`.
 
 ---
 
@@ -179,7 +204,21 @@ Represents the category of a significant change applied to an inventory record.
 | RESERVATION       | Reservation      | Stock reserved as part of an order in progress.                 |
 | SALE_OUTBOUND     | Sale Outbound    | Stock removed as a result of a completed sale.                  |
 | ADJUSTMENT        | Adjustment       | Manual correction of the available quantity.                    |
-| RETURN            | Return           | Stock reincorporated as a result of an approved return.          |
+| RETURN            | Return           | Stock reincorporated as a result of a completed return.          |
+
+## Reservation Release
+
+The catalog intentionally has no dedicated code for releasing a `RESERVATION` (when a payment is rejected or an Order in `PENDING_PAYMENT` is cancelled before completing the purchase — a `CART` holds no reservation). This case is recorded as an `ADJUSTMENT` movement that references the cancelled `Order` and restores the previously reserved quantity to `Inventory.availableQuantity`, keeping the catalog aligned with the five movement types defined by the business specification instead of introducing a sixth one.
+
+## Movement Semantics
+
+| Code          | Effect on `availableQuantity` | References an `Order` |
+| ------------- | ----------------------------- | --------------------- |
+| INBOUND       | Increases                     | No                    |
+| RESERVATION   | Decreases (units set aside for the order) | Yes       |
+| SALE_OUTBOUND | None — the units already left at reservation; it closes the traceability chain | Yes |
+| ADJUSTMENT    | Signed correction (zero when only the condition changes) | Only when it releases a reservation; otherwise a reason is mandatory |
+| RETURN        | Increases, on the inventory record the units originally left from (DEC-25) | Yes |
 
 ---
 
@@ -207,19 +246,21 @@ Represents the current stage of an order within its lifecycle.
 
 ```text
 CART
-   │
-   ▼
+   │  ▲
+   ▼  │ (cancellation / rejected payment — DEC-20)
 PENDING_PAYMENT
    │
    ▼
  PAID
    │
-   ▼
-SHIPPED
+   ├──[Order contains at least one physical item]──> SHIPPED ──> DELIVERED
    │
-   ▼
-DELIVERED
+   └──[Order contains only digital items]───────────────────────> DELIVERED
 ```
+
+`SHIPPED` describes a physical departure from a warehouse and only applies to an Order that contains at least one `PhysicalProduct`. An Order composed exclusively of `DigitalProduct` items skips `SHIPPED` and transitions directly from `PAID` to `DELIVERED` (see Order's "Business Rule — Digital Fulfillment Path" in Domain Model.md). When an order has several shipments, it becomes `SHIPPED` once all of them are `IN_TRANSIT` and `DELIVERED` once all of them are `DELIVERED` (DEC-21).
+
+The only backward transition is `PENDING_PAYMENT → CART` (DEC-20). `DELIVERED` is terminal and means "Entregado / Finalizado" (DEC-19). There is no `CANCELLED` value, since the business specification defines exactly these five stages.
 
 ---
 
@@ -240,6 +281,14 @@ Represents the current logistics status of a shipment.
 | PREPARING    | Preparing   | Products are being packed at the origin warehouse.  |
 | IN_TRANSIT   | In Transit  | Shipment has left the warehouse and is en route.    |
 | DELIVERED    | Delivered   | Shipment has been delivered to the buyer.            |
+
+## Lifecycle
+
+```text
+PREPARING ──> IN_TRANSIT ──> DELIVERED
+```
+
+Forward only, one step at a time, advanced by the Logistics Operator. `PREPARING` corresponds to the order's *alistamiento* (the order is `PAID`); `IN_TRANSIT` is the physical departure from the warehouse.
 
 ---
 
@@ -262,13 +311,23 @@ Represents the current status of a product return request.
 | REJECTED     | Rejected    | Return request has been denied.                        |
 | COMPLETED    | Completed   | Returned product has been received and processed.       |
 
+## Lifecycle
+
+```text
+REQUESTED ──> APPROVED ──> COMPLETED
+    │
+    └───────> REJECTED
+```
+
+`APPROVED` is a commercial decision; `COMPLETED` confirms the physical receipt of the product, which is when stock is reincorporated (DEC-25). `REJECTED` and `COMPLETED` are terminal.
+
 ---
 
 # RefundStatus
 
 ## Description
 
-Represents the current status of a refund associated with an approved return.
+Represents the current status of a refund associated with a completed return.
 
 ## Inherits From
 
@@ -278,9 +337,19 @@ Represents the current status of a refund associated with an approved return.
 
 | Code       | Name       | Description                                     |
 | ----------- | ---------- | ------------------------------------------------------ |
-| PENDING     | Pending    | Refund has been requested and awaits processing.  |
+| PENDING     | Pending    | Refund has been opened for a completed return and awaits the Administrator's decision. |
 | PROCESSED   | Processed  | Refund has been completed and funds returned.       |
 | REJECTED    | Rejected   | Refund request has been denied.                     |
+
+## Lifecycle
+
+```text
+PENDING ──> PROCESSED
+   │
+   └──────> REJECTED
+```
+
+A refund is opened in `PENDING` automatically when its return is `COMPLETED`, and the Administrator resolves it. Both `PROCESSED` and `REJECTED` are terminal. Rejecting a refund never reverts stock already reincorporated (DEC-25).
 
 ---
 
@@ -302,6 +371,14 @@ Business catalogs must use controlled values defined by the domain. The applicat
 
 A business concept should be modeled as a `DomainCatalog` Value Object when it requires a business code, a display name, a business description, and controlled domain evolution — as is the case for every catalog listed above.
 
+## Behavior on Value Objects
+
+A catalog may expose simple, side-effect-free questions about its own values (`allowsAccess()`, `allowsCartManagement()`, `allowsOrderConfirmation()`, `allowsNewOrders()`, `isReservable()`). This keeps each rule next to the value it describes, so services ask the Value Object instead of comparing codes themselves. These methods never read external state.
+
+## Persisting Value Objects
+
+Adapters persist a catalog value by its `code` only, and rebuild it with `fromCode(code)`. `name` and `description` belong to the domain and are never stored or read from the database.
+
 ## Relationship With Entities
 
 Entities reference Value Objects rather than primitive strings whenever the referenced value represents a controlled business concept.
@@ -309,7 +386,7 @@ Entities reference Value Objects rather than primitive strings whenever the refe
 Examples:
 
 ```text
-Person.role : SystemRole
+User.role : SystemRole
 
 User.status : UserStatus
 
@@ -325,7 +402,7 @@ Order.status : OrderStatus
 
 Shipment.status : ShipmentStatus
 
-Return.status : ReturnStatus
+ReturnRequest.status : ReturnStatus
 
 Refund.status : RefundStatus
 ```

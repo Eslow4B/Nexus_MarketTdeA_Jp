@@ -1,0 +1,109 @@
+# .clinerules — NexusMarket (Nexus_MarketTdeA_Jp)
+
+Contexto de memoria del proyecto: arquitectura, convenciones y stack. La fuente de verdad es la carpeta `SDD/`; este archivo es solo un resumen. Si algo aquí contradice al SDD, manda el SDD.
+
+## Estructura del repositorio
+- Raíz del workspace: `SDD/` (especificación), `nexusMarket/` (código Maven), `ESPECIFICACION_FUNCIONAL.md` (transcripción fiel del PDF, misma numeración), el PDF original, `README.md`, `LICENSE`, `.gitignore`.
+- El proyecto Maven está en `nexusMarket/` (NO en la raíz). `nexusMarket/pom.xml`.
+- Documentación del SDD (en inglés). Orden de lectura recomendado:
+  1. `SDD/Domain/Business Decisions.md` — DEC-01..DEC-29: decisiones tomadas donde el PDF es ambiguo, silencioso o contradictorio (posibles "trampas" del profesor). Tiene índice al inicio.
+  2. `SDD/Domain/Domain Model.md` — entidades, invariantes, agregados → repositorios.
+  3. `SDD/Domain/Domain Value Objects.md` — catálogos y ciclos de vida.
+  4. `SDD/Domain/Domain Services.md` — índice de los 37 servicios, criterio de descomposición, orquestación y convenciones.
+  5. `SDD/services/*.md` — un archivo por servicio (37).
+  6. `SDD/Software Architecture/Software Architecture.md` — capas, puertos, matriz de autorización, excepciones.
+- NUNCA aplicar una interpretación que no esté en el PDF o en Business Decisions.md; si aparece una ambigüedad nueva, agregar un DEC con el siguiente número libre (nunca renumerar).
+
+## Stack tecnológico
+- Java 17 · Spring Boot 4.1.1 (parent `spring-boot-starter-parent`) · Maven (groupId `cs2`, artifactId `nexusMarket`, 0.0.1-SNAPSHOT).
+- Dependencias: spring-boot-starter-data-jpa, spring-boot-starter-security, spring-boot-starter-webmvc, mysql-connector-j (runtime), Lombok (optional + annotationProcessor), H2 (solo test), starters `-test` (data-jpa/security/webmvc).
+- Persistencia: MySQL (conexión por variables de entorno `DB_URL`, `DB_USERNAME`, `DB_PASSWORD`). Tests con H2 en memoria (`src/test/resources/application.properties`). Sin MongoDB (no reintroducir sin una entidad documental que lo justifique).
+
+## Arquitectura
+- Hexagonal (Ports & Adapters) + DDD. Paquete raíz: `application`.
+- Estructura objetivo:
+  - `adapters/in/rest/{controllers,requests,responses,mappers}`
+  - `adapters/out/persistence/mysql/{adapters,entities,repositories,mappers}`
+  - `domain/{models,valueobjects,enums,services,exceptions,ports/in,ports/out}`
+  - `infrastructure/{config,database,security}`
+- Dependencias SIEMPRE apuntan hacia `domain`. Controllers sin reglas de negocio; DTOs nunca entran al dominio; entidades de persistencia nunca se exponen por API; adapters implementan puertos sin reglas de negocio.
+- El dominio solo usa la librería estándar de Java y Lombok (compile-time). Nada de Spring, JPA, `@Transactional`, JSON ni HTTP en `domain`.
+- Estado actual del código: implementado SOLO el dominio (`domain/models`, `domain/valueobjects`, `domain/exceptions/{DomainException, DomainValidationException}`). FALTAN (siguiente etapa): `domain/ports`, `domain/services`, el resto de `domain/exceptions`, `adapters/`, `infrastructure/`.
+
+## Convenciones para la etapa de puertos (Software Architecture.md)
+- Un Input Port por cada operación de la tabla "Operations" de cada `SDD/services/*.md`: `reserveStock` → `ReserveStockUseCase`. Lo implementa el servicio dueño del archivo.
+- Los casos de uso invocados por un rol reciben el `User` autenticado (actor) como primer parámetro; los previos a autenticación (DEC-01) y los internos no.
+- Los casos de uso internos (reserva, salida por venta, retorno de stock, liberación de reserva, factura, creación de envíos, seguimiento de orden, apertura de reembolso, reversión de orden pendiente) NO se exponen en adaptadores. Excepción: `PaymentConfirmationService` recibe la señal externa de pago (DEC-22).
+- Output Ports: `UserRepository`, `ProductRepository`, `WarehouseRepository`, `InventoryRepository`, `InventoryMovementRepository`, `OrderRepository`, `InvoiceRepository`, `ShipmentRepository`, `ReturnRequestRepository`, `RefundRepository` (uno por agregado; `OrderItem` y `ReturnItem` van dentro de su agregado) y `PasswordHasher` (implementado en `infrastructure/security`).
+- Ids: el de `User` es su documento de identidad (DEC-02); el resto, UUID generado por el servicio que crea la entidad. Fechas: `now` asignado por el servicio.
+- Atomicidad: las operaciones orquestadas son atómicas; la transacción la pone infraestructura alrededor del Input Port, nunca el dominio.
+- Excepciones: todas extienden `DomainException`. El adaptador REST las traduce a HTTP (tabla sugerida en Software Architecture.md).
+
+## Dominio (ya implementado — respetar el estilo)
+- Modelos inmutables: campos `private final`, Lombok `@Getter`, sin setters. Constructor EXPLÍCITO (no `@AllArgsConstructor`) que valida invariantes con el helper package-private `DomainAssert` (check, notNull, notBlank, notNegative, positive, immutableCopy) → `DomainValidationException`. Cambiar estado = construir una instancia nueva.
+- Colecciones: se guardan con `DomainAssert.immutableCopy(...)` (`List.copyOf`, null → lista vacía) y se exponen directamente con `@Getter`.
+- Identidad: entidades con `@EqualsAndHashCode(onlyExplicitlyIncluded = true)` + `@EqualsAndHashCode.Include` en `id` (`OrderItem` y `ReturnItem` no tienen id).
+- Jerarquía: `User` (raíz, concreta) → `Buyer`, `Seller`; `Product` (abstract, constructor protected) → `PhysicalProduct`, `DigitalProduct`; además `Warehouse`, `Inventory`, `InventoryMovement`, `Order` (+`OrderItem`), `Invoice`, `Shipment`, `ReturnRequest` (+`ReturnItem`; `Return` es keyword), `Refund`.
+- RG-02 por construcción: `Buyer` y `Seller` fijan su rol (no lo reciben por parámetro); un `User` plano rechaza BUYER/SELLER.
+- `Seller` NO tiene listas de warehouses/products (referencias circulares imposibles con campos final): se consultan por repositorio desde `Warehouse.owner` y `Product.seller`.
+- Atributos añadidos por decisiones: `Product.price` (>0, DEC-11); `Order.deliveryAddress` (snapshot, DEC-18); `OrderItem.reservedInventory` (1 solo inventario por ítem, DEC-14); `InventoryMovement.order` y `.reason`; `ReturnRequest.items: List<ReturnItem>` + `requestDate` (solo físicos, DEC-24); `Refund.creationDate`; `Shipment.creationDate` (1 envío por bodega de origen, DEC-21).
+- Invariantes en constructores: email con formato y en minúsculas (username también en minúsculas); inventario solo en bodega Marketplace o del vendedor del producto (DEC-13); Order sin productos repetidos, y fuera de CART con ítems, dirección y reservas; digital-only nunca SHIPPED; ReturnRequest solo de orden DELIVERED con cantidades ≤ compradas; Invoice.total = Order.total; Refund solo de devolución COMPLETED y ≤ monto reembolsable; ADJUSTMENT manual exige `reason`; RESERVATION/SALE_OUTBOUND/RETURN exigen `order`.
+- Comportamiento en el dominio: `User.isActive()`, `Buyer.hasAddress()`, `Product.isAvailableForSale()` (PUBLISHED + vendedor ACTIVE, DEC-08), `Inventory.canReserve()`, `Order.containsPhysicalProducts()/getPhysicalItems()/findItem()/getOriginWarehouses()/getTotalAmount()/isFinalized()`, `OrderItem.isPhysical()/getSubtotal()`, `ReturnRequest.getRefundableAmount()`, `Shipment.getItems()`, `Warehouse.isMarketplaceOwned()`. En VOs: `CommercialStatus.allowsCartManagement()/allowsOrderConfirmation()` (DEC-07), `UserStatus.allowsAccess()`, `ProductStatus.allowsNewOrders()`, `InventoryCondition.isReservable()`.
+- Value Objects: clases `final` que extienden `DomainCatalog` (abstract: code/name/description), constructor privado, instancias `public static final` (estilo enum-like), igualdad SOLO por `code`. Cada catálogo expone `values()` y `fromCode(String)` (código desconocido → `DomainValidationException`); `toString()` devuelve el `code`. Se persisten solo por `code`.
+- Catálogos (usar SIEMPRE los value objects, nunca strings tipo `"ACTIVE"`):
+  - SystemRole: BUYER, SELLER, ADMINISTRATOR, LOGISTICS_OPERATOR, SUPERVISOR
+  - UserStatus: ACTIVE, INACTIVE, BLOCKED
+  - CommercialStatus: ACTIVE, RESTRICTED, SUSPENDED
+  - ProductStatus: PUBLISHED, SUSPENDED, DISCONTINUED
+  - InventoryCondition: AVAILABLE, DAMAGED
+  - MovementType: INBOUND, RESERVATION, SALE_OUTBOUND, ADJUSTMENT, RETURN
+  - OrderStatus: CART, PENDING_PAYMENT, PAID, SHIPPED, DELIVERED
+  - ShipmentStatus: PREPARING, IN_TRANSIT, DELIVERED
+  - ReturnStatus: REQUESTED, APPROVED, REJECTED, COMPLETED
+  - RefundStatus: PENDING, PROCESSED, REJECTED
+
+## Servicios (especificados, aún NO implementados — 37 servicios de grano fino)
+- Auth: AuthenticationService, AuthorizationService (centraliza RG-03, usado por los demás).
+- Usuarios (OBJ-01/02/03): UserManagementService, BuyerRegistrationService, SellerRegistrationService, SellerAdministrationService.
+- Bodegas/Catálogo (OBJ-04/05): WarehouseManagementService, ProductCatalogService, CatalogConsultationService.
+- Inventario (OBJ-06, uno por MovementType + consulta): StockInboundService, StockReservationService, StockSaleOutboundService, StockAdjustmentService, StockReturnService, InventoryConsultationService.
+- Carrito/Pedido (OBJ-07/08): CartService, OrderConfirmationService, PaymentConfirmationService, OrderFulfillmentTrackingService, OrderCancellationService, OrderConsultationService.
+- Facturación (OBJ-09): InvoiceGenerationService, InvoiceConsultationService.
+- Envíos (OBJ-10): ShipmentCreationService, ShipmentTrackingService, ShipmentConsultationService.
+- Devoluciones/Reembolsos (OBJ-11): ReturnRequestService, ReturnReviewService, ReturnCompletionService, RefundProcessingService, ReturnAndRefundConsultationService.
+- Reportería (OBJ-12, Supervisor, DEC-29): UserReportingService, CatalogReportingService, InventoryReportingService, OrderReportingService, ShipmentReportingService, ReturnRefundReportingService.
+- Cada servicio: expone casos de uso vía Input Ports; depende solo de Output Ports u otros servicios; valida autorización (RG-03) vía `AuthorizationService` como guard clause → `UnauthorizedOperationException`. No duplica las invariantes que ya valida la entidad.
+- Excepciones de negocio permitidas (`domain/exceptions`, todas extienden `DomainException`): UnauthorizedOperationException, InvalidCredentialsException, UserNotActiveException, DuplicateUserDataException, SellerSelfRegistrationNotAllowedException, BuyerNotEligibleForOrderException, ProductNotAvailableException, InsufficientInventoryException, DamagedInventoryReservationException, InvalidOrderStatusTransitionException, OrderAlreadyDeliveredException, InvalidDeliveryAddressException, InvalidShipmentStatusTransitionException, InvalidReturnStatusTransitionException, ResourceNotFoundException, DomainValidationException. NUNCA excepciones genéricas/técnicas desde servicios.
+
+## Reglas de negocio clave (trazables a SDD/)
+- RG-01: toda operación requiere usuario autenticado, salvo autenticación y registro de compradores (DEC-01). Login por email o username (DEC-03).
+- RG-02: cada persona tiene EXACTAMENTE un rol.
+- RG-03: nadie gestiona información fuera de su rol (Authorization Matrix + DEC-04/05/06).
+- `id` (documento de identidad, DEC-02), `email`, `username` de User únicos en toda la plataforma.
+- CommercialStatus (DEC-07): ACTIVE = carrito + confirmar; RESTRICTED = carrito sí, confirmar NO; SUSPENDED = ni carrito ni confirmar. Nunca afecta órdenes ya confirmadas.
+- El Seller NO se auto-registra: lo incorpora un Administrador junto con su primera bodega, en una sola operación atómica (DEC-09). El dueño de una bodega no cambia (DEC-10).
+- Product no disponible para la venta (SUSPENDED/DISCONTINUED o vendedor no ACTIVE, DEC-08) no se agrega al carrito ni se confirma; no afecta órdenes existentes. Se registra como PUBLISHED (DEC-12). DISCONTINUED es definitivo (DEC-27).
+- Inventory: availableQuantity nunca negativa; stock `DAMAGED`, inexistente o insuficiente no es reservable; cada ítem se reserva de UN solo inventario (el AVAILABLE con más unidades, DEC-14); TODO cambio genera un `InventoryMovement`; liberar reserva = ADJUSTMENT con referencia a la orden.
+- Order: CART → PENDING_PAYMENT (refresca precios, fija dirección, reserva) → PAID (saleOutbound + invoice + digitales entregados (DEC-28) + 1 Shipment PREPARING por bodega de origen) → SHIPPED (cuando TODOS los envíos están IN_TRANSIT) → DELIVERED (cuando TODOS están DELIVERED). Digital-only: PAID → DELIVERED. PENDING_PAYMENT → CART por cancelación o pago rechazado (DEC-20). Un solo pedido abierto (CART o PENDING_PAYMENT) por comprador (DEC-17). DELIVERED = "Entregado/Finalizado", terminal (DEC-19).
+- Returns/Refunds (DEC-24/25): solo productos físicos de órdenes DELIVERED, una devolución por orden. REQUESTED → APPROVED/REJECTED (Admin) → COMPLETED (Admin confirma recepción física: AQUÍ se reincorpora stock con RETURN en el inventario de origen y se abre el Refund en PENDING) → Admin resuelve el Refund como PROCESSED/REJECTED. Monto = precio pagado × cantidad devuelta.
+
+## Autorización (resumen de la matriz)
+- Solo Administrador: registro/administración de sellers, gestión de usuarios, registro/actualización de bodegas, devoluciones (revisión y recepción) y reembolsos.
+- Seller: sus productos, inventario de sus productos, consulta de sus ítems en órdenes.
+- Seller + Logistics Operator: administración de inventario (el operador en cualquier bodega, DEC-06).
+- Buyer: carrito, confirmación/cancelación de sus órdenes, solicitud de devoluciones, consulta de sus órdenes/facturas/envíos/devoluciones/reembolsos.
+- Solo Logistics Operator: avance de envíos.
+- Solo Supervisor: reportes administrativos (solo lectura, 6 reportes).
+
+## Convenciones de código
+- Paquetes en inglés bajo `application.*`. Javadocs en inglés (clase y atributos clave, formato `<p>` cuando hay varias líneas; citar el DEC cuando una regla viene de Business Decisions).
+- Indentación: 4 espacios (los archivos del dominio usan 4; `NexusMarketApplication.java` hereda tabs del starter).
+- Tests: JUnit 5. Tests del dominio sin Spring en `nexusMarket/src/test/java/application/domain/`; `@SpringBootTest` solo para el contexto. (Los tests no son prioridad en esta etapa.)
+- Comandos: ejecutar Maven SIEMPRE desde `nexusMarket/` (ej. `mvnw.cmd test`).
+
+## Especificación Funcional del Negocio (resumen)
+- Fuente: PDF `Especificación Funcional del Negocio - NexusMarket.pdf`, transcrito en `ESPECIFICACION_FUNCIONAL.md`. Secciones: 1–6 contexto y operación, Dominios 1–7, 10 Restricciones (RG-01..03), 11 Validaciones críticas, 12 Matriz de responsabilidades (el PDF no tiene secciones 7–9).
+- Procesos INCLUIDOS (13, §3.1). FUERA de alcance (§3.2): interfaces gráficas, apps móviles, portales web, autenticación técnica, tecnologías de implementación, arquitectura del software y almacenamiento (el SDD documenta arquitectura como decisión de DISEÑO, no como requerimiento funcional).
+- Participantes: Comprador, Vendedor, Operador Logístico, Administrador, Supervisor (solo consulta/seguimiento).
+- Flujo §6.1: Incorporación → Catálogo → Inventario → Publicación → Compra → Transacción → Logística → Cierre.
+- El PDF NO define criterios de aceptación formales; el equivalente trazable son las precondiciones/resultados de cada operación en `SDD/services/*.md`, las validaciones críticas y los DEC.

@@ -1,11 +1,10 @@
 package application.domain.valueobjects;
 
-import lombok.Getter;
+import java.util.List;
 
 /**
  * Represents the current stage of an order within its lifecycle.
  */
-@Getter
 public final class OrderStatus extends DomainCatalog {
 
     /** Provisional selection of products, not yet confirmed. */
@@ -27,6 +26,28 @@ public final class OrderStatus extends DomainCatalog {
     /** Order has been successfully delivered to the buyer. */
     public static final OrderStatus DELIVERED =
             new OrderStatus("DELIVERED", "Delivered", "Order has been successfully delivered to the buyer.");
+
+    private static final List<OrderStatus> VALUES = List.of(CART, PENDING_PAYMENT, PAID, SHIPPED, DELIVERED);
+
+    /**
+     * Returns every allowed value of this catalog.
+     *
+     * @return unmodifiable list of values
+     */
+    public static List<OrderStatus> values() {
+        return VALUES;
+    }
+
+    /**
+     * Returns the value whose business code matches the given one.
+     *
+     * @param code business code to look up
+     * @return the matching value
+     * @throws application.domain.exceptions.DomainValidationException if the code is unknown
+     */
+    public static OrderStatus fromCode(String code) {
+        return findByCode(VALUES, code, "OrderStatus");
+    }
 
     private OrderStatus(String code, String name, String description) {
         super(code, name, description);

@@ -2,6 +2,7 @@ package application.domain.models;
 
 import application.domain.valueobjects.ProductStatus;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 /**
@@ -17,11 +18,12 @@ public class PhysicalProduct extends Product {
      * @param name        commercial name of the product
      * @param description description of the product shown to buyers
      * @param variants    variations of the product, such as color, size, or model
+     * @param price       current sale price; must be greater than zero
      * @param status      current status of the product within the catalog
      * @param seller      seller who owns and publishes the product
      */
     public PhysicalProduct(String id, String name, String description, List<String> variants,
-                           ProductStatus status, Seller seller) {
-        super(id, name, description, variants, status, seller);
+                           BigDecimal price, ProductStatus status, Seller seller) {
+        super(id, name, description, variants, price, status, seller);
     }
 }
